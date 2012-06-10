@@ -73,6 +73,10 @@ void setup()
   Serial.begin(115200); // use the serial port
   
   Timer1.initialize(PIEZO_TIMER_PERIOD);
+  Timer1.disablePwm(1);
+  Timer1.disablePwm(9);
+  Timer1.disablePwm(2);
+  Timer1.disablePwm(10);
   Timer1.attachInterrupt(handlePiezo);
   
   piezoStateReset(1);
@@ -99,7 +103,7 @@ void handleAccelerometer()
   {
     accelerometerOld = accelerometer;
     sprintf(messageBuffer, "%d,%d,%d", accelerometer.x, accelerometer.y, accelerometer.z);
-    cmdMessenger.sendCmd(kKNOCK, messageBuffer);
+    cmdMessenger.sendCmd(kACCELEROMETER, messageBuffer);
   }
 }
 
@@ -163,6 +167,6 @@ void handlePiezo()
 
 void loop()
 {
-    //handleAccelerometer();
+    handleAccelerometer();
 }
 
