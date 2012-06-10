@@ -7,14 +7,15 @@
 // Streaming4 library available from http://arduiniana.org/libraries/streaming/
 #include <Streaming.h>
 
-// Timer library from http://code.google.com/p/arduino-timerone/
-#include <TimerOne.h>
+// Timer from http://arduino.cc/playground/Code/SimpleTimer
+#include <SimpleTimer.h>
 
 // Mustnt conflict / collide with our message payload data. Fine if we use base64 library ^^ above
 #define FIELD_SEPARATOR ','
 #define COMMAND_SEPARATOR '\r\n'
 
 CmdMessenger cmdMessenger = CmdMessenger(Serial, FIELD_SEPARATOR, COMMAND_SEPARATOR);
+SimpleTimer timer;
 
 enum
 {
@@ -34,6 +35,7 @@ enum
 // Message buffer for talking to computer
 char messageBuffer[100];
 
+#define ACCELEROMETER_TIMER_PERIOD 100
 #define ACCELEROMETER_TRESHOLD 10
 #define ACCELEROMETER_PIN_X A1
 #define ACCELEROMETER_PIN_Y A2
@@ -52,8 +54,8 @@ AccelerometerValue accelerometerOld;
 
 // Piezo sensor settings and structures
 #define PIEZO_PIN A0
-#define PIEZO_TIMER_PERIOD 500
-#define PIEZO_TAKE_SAMPLES 200
+#define PIEZO_TIMER_PERIOD 1
+#define PIEZO_TAKE_SAMPLES 100
 #define PIEZO_TRESHOLD 70
 #define PIEZO_AFTER_EVENT_DELAY 150000
 
@@ -70,16 +72,12 @@ PiezoState piezoState;
 
 void setup()
 {
-  Serial.begin(115200); // use the serial port
+  Serial.begin(115200);
+
+  piezoStateReset();
   
-  Timer1.initialize(PIEZO_TIMER_PERIOD);
-  Timer1.disablePwm(1);
-  Timer1.disablePwm(9);
-  Timer1.disablePwm(2);
-  Timer1.disablePwm(10);
-  Timer1.attachInterrupt(handlePiezo);
-  
-  piezoStateReset(1);
+  timer.setInterval(PIEZO_TIMER_PERIOD, handlePiezo);
+  timer.setInterval(ACCELEROMETER_TIMER_PERIOD, handleAccelerometer);
 }
 
 void handleAccelerometer()
@@ -107,8 +105,7 @@ void handleAccelerometer()
   }
 }
 
-// void piezoStateReset(PiezoState ps)
-void piezoStateReset(int afterEvent)
+void piezoStateReset()
 {  
   piezoState.currentIndex = 0;
   piezoState.currentPeak = 0;
@@ -119,14 +116,7 @@ void piezoStateReset(int afterEvent)
     piezoState.buffer[i] = 0;
   }
   
-  if(afterEvent)
-  {
-    piezoState.lastEventTime = micros();
-  }
-  else
-  {
-    piezoState.lastEventTime = 0;
-  }
+  piezoState.lastEventTime = micros();
 }
 
 void handlePiezo()
@@ -144,10 +134,10 @@ void handlePiezo()
   // Do we have a peak value under currentIndex that will be "pushed out" from value buffer?
   if((piezoState.currentPeak > PIEZO_TRESHOLD) && (currentIndex == piezoState.currentPeakIndex))
   {
-    sprintf(messageBuffer, "%d", piezoState.currentPeak);
+    sprintf(messageBuffer, "%lu,%d", millis(), piezoState.currentPeak);
     cmdMessenger.sendCmd(kKNOCK, messageBuffer);
     
-    piezoStateReset(1);
+    piezoStateReset();
     
     return;
   }
@@ -167,6 +157,6 @@ void handlePiezo()
 
 void loop()
 {
-    handleAccelerometer();
+    timer.run();
 }
 
