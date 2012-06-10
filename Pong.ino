@@ -55,7 +55,7 @@ AccelerometerValue accelerometerOld;
 #define PIEZO_TIMER_PERIOD 500
 #define PIEZO_TAKE_SAMPLES 200
 #define PIEZO_TRESHOLD 70
-#define PIEZO_AFTER_EVENT_DELAY 200000
+#define PIEZO_AFTER_EVENT_DELAY 150000
 
 typedef struct {
   int currentIndex;
@@ -163,7 +163,6 @@ void handlePiezo()
 
 void loop()
 {
-    //handlePiezo();
     //handleAccelerometer();
 }
 
