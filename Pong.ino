@@ -7,11 +7,14 @@
 // Streaming4 library available from http://arduiniana.org/libraries/streaming/
 #include <Streaming.h>
 
-// Mustnt conflict / collide with our message payload data. Fine if we use base64 library ^^ above
-char field_separator = ',';
-char command_separator = '\n';
+// Timer library from http://code.google.com/p/arduino-timerone/
+#include <TimerOne.h>
 
-CmdMessenger cmdMessenger = CmdMessenger(Serial, field_separator, command_separator);
+// Mustnt conflict / collide with our message payload data. Fine if we use base64 library ^^ above
+#define FIELD_SEPARATOR ','
+#define COMMAND_SEPARATOR '\r\n'
+
+CmdMessenger cmdMessenger = CmdMessenger(Serial, FIELD_SEPARATOR, COMMAND_SEPARATOR);
 
 enum
 {
@@ -31,33 +34,10 @@ enum
 // Message buffer for talking to computer
 char messageBuffer[100];
 
-#define STATE_SILENT 0
-#define STATE_RISE 1
-#define STATE_FALL 2
-
-#define TAKE_SAMPLES 30
-#define STATE_CHANGE_TRESHOLD 20
-#define LED_PIN 13
-#define SENSOR_PIN A0
-
 #define ACCELEROMETER_TRESHOLD 10
 #define ACCELEROMETER_PIN_X A1
 #define ACCELEROMETER_PIN_Y A2
 #define ACCELEROMETER_PIN_Z A3
-
-int ledState = LOW;
-
-// Last peak value - will be our knock "velocity"
-int peakValue = 0;
-
-// Edge of signal from piezo will rise until it's peak and fall. The
-int state = STATE_SILENT;
-
-// We'll store number of TAKE_SAMPLES last samples in this array
-int lastSensorValues[TAKE_SAMPLES];
-
-// "Pointer" to latest sample
-int lastSampleIndex = 0;
 
 // Accelerometer value structure
 typedef struct {
@@ -70,15 +50,32 @@ typedef struct {
 AccelerometerValue accelerometer;
 AccelerometerValue accelerometerOld;
 
+// Piezo sensor settings and structures
+#define PIEZO_PIN A0
+#define PIEZO_TIMER_PERIOD 500
+#define PIEZO_TAKE_SAMPLES 200
+#define PIEZO_TRESHOLD 70
+#define PIEZO_AFTER_EVENT_DELAY 200000
+
+typedef struct {
+  int currentIndex;
+  int currentPeak;
+  int currentPeakIndex;
+  unsigned long currentPeakTime;
+  unsigned long lastEventTime;
+  int buffer[PIEZO_TAKE_SAMPLES];
+} PiezoState;
+
+PiezoState piezoState;
+
 void setup()
 {
-  pinMode(LED_PIN, OUTPUT); // declare the ledPin as as OUTPUT
-  Serial.begin(115200);       // use the serial port
-    
-  // Clear the storage.. Just in case.
-  for(int i = 0; i < TAKE_SAMPLES; i++) {
-    lastSensorValues[i] = 0;
-  }
+  Serial.begin(115200); // use the serial port
+  
+  Timer1.initialize(PIEZO_TIMER_PERIOD);
+  Timer1.attachInterrupt(handlePiezo);
+  
+  piezoStateReset(1);
 }
 
 void handleAccelerometer()
@@ -102,68 +99,71 @@ void handleAccelerometer()
   {
     accelerometerOld = accelerometer;
     sprintf(messageBuffer, "%d,%d,%d", accelerometer.x, accelerometer.y, accelerometer.z);
-    cmdMessenger.sendCmd(kACCELEROMETER, messageBuffer);
+    cmdMessenger.sendCmd(kKNOCK, messageBuffer);
+  }
+}
+
+// void piezoStateReset(PiezoState ps)
+void piezoStateReset(int afterEvent)
+{  
+  piezoState.currentIndex = 0;
+  piezoState.currentPeak = 0;
+  piezoState.currentPeakIndex = 0;
+  piezoState.currentPeakTime = micros();
+  for(int i = 0; i < PIEZO_TAKE_SAMPLES; i++)
+  {
+    piezoState.buffer[i] = 0;
+  }
+  
+  if(afterEvent)
+  {
+    piezoState.lastEventTime = micros();
+  }
+  else
+  {
+    piezoState.lastEventTime = 0;
   }
 }
 
 void handlePiezo()
 {
-  int lastState = state;
-  int previousSampleIndex;
-  int sensorReading = 0;
+  int currentValue = analogRead(PIEZO_PIN);
+  unsigned long currentTime = micros();
+  int currentIndex = (piezoState.currentIndex + 1) == PIEZO_TAKE_SAMPLES ? 0 : piezoState.currentIndex + 1;
+  
+  // Are we still in "idle" state after registering a knock on piezo?
+  if((currentTime - piezoState.lastEventTime) < PIEZO_AFTER_EVENT_DELAY)
+  {
+    return;
+  }
+  
+  // Do we have a peak value under currentIndex that will be "pushed out" from value buffer?
+  if((piezoState.currentPeak > PIEZO_TRESHOLD) && (currentIndex == piezoState.currentPeakIndex))
+  {
+    sprintf(messageBuffer, "%d", piezoState.currentPeak);
+    cmdMessenger.sendCmd(kKNOCK, messageBuffer);
     
-  int goneUp = 0;
-  int goneDown = 0;
-   
-  // Store the new sensor value
-  sensorReading = analogRead(SENSOR_PIN);
+    piezoStateReset(1);
     
-  // Do we have a change in sensor reading?
-  if(sensorReading != lastSensorValues[lastSampleIndex]) {
-    // Store the new value
-    lastSampleIndex++;
-    lastSampleIndex = lastSampleIndex > TAKE_SAMPLES ? 0 : lastSampleIndex;
-    lastSensorValues[lastSampleIndex] = sensorReading;
-    
-    // Store the peak (if it's peak)
-    peakValue = peakValue < sensorReading ? sensorReading : peakValue;
-    
-    // Check for state changes
-    for(int i = 1; i < TAKE_SAMPLES; i++) {
-      if(lastSensorValues[i-1] > lastSensorValues[i]) {
-        goneUp++;
-      } else {
-        // We store only unique values so it must go up or down, there's no "stayedLevel"
-        goneDown++;
-      }
-    }
-    
-    // See in what new state we are in
-    if(goneUp > STATE_CHANGE_TRESHOLD) {
-      state = STATE_RISE;
-    } else if(goneDown > STATE_CHANGE_TRESHOLD) {
-      state = STATE_FALL;
-    }
-    
-    // Do we have a state change?
-    if(lastState == STATE_RISE && state == STATE_FALL) {
-      // Fire!
-      sprintf(messageBuffer, "%d", peakValue);
-      cmdMessenger.sendCmd(kKNOCK, messageBuffer);
-      
-      // Clean up, ie reset peak
-      peakValue = 0;
-      
-      // Delay so we can ignore the vibration that follows (ie piezo flexes couple times)
-      // 0.1s is enough for our application.. Might be a bit slow for drummer though.
-      delay(30);
-    }
+    return;
+  }
+  
+  // Otherwise just regular value "push in" and peak check
+  piezoState.currentIndex = currentIndex;
+  piezoState.buffer[piezoState.currentIndex] = currentValue;
+  
+  // Peak check
+  if(piezoState.currentPeak < currentValue)
+  {
+    piezoState.currentPeak = currentValue;
+    piezoState.currentPeakIndex = currentIndex;
+    piezoState.currentPeakTime = micros();
   }
 }
 
 void loop()
 {
-    handlePiezo();
-    handleAccelerometer();
+    //handlePiezo();
+    //handleAccelerometer();
 }
 
